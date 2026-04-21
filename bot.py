@@ -1,13 +1,19 @@
 import requests
 from bs4 import BeautifulSoup
+import os
 
 # --- NASTAVENÍ ---
-TELEGRAM_TOKEN = "TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]" # Bude to vypadat třeba jako "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-CHAT_ID = "722376617"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") 
+CHAT_ID = os.getenv("CHAT_ID")
+SOUBOR_PAMET = "posledni_dokument.txt"
 
 def posli_telegram_zpravu(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    parametry = {"chat_id": CHAT_ID, "text": text}
+    parametry = {
+        "chat_id": CHAT_ID, 
+        "text": text,
+        "disable_web_page_preview": "true" 
+    }
     requests.get(url, params=parametry)
 
 # --- SCRAPER (Týniště) ---
@@ -22,8 +28,18 @@ prvni_odkaz = tabulka.find('a')
 nazev = prvni_odkaz.text.strip()
 odkaz = "https://www.tyniste.cz" + prvni_odkaz['href']
 
-# --- FINÁLE ---
-zprava = f"🔔 Nový dokument na úřední desce!\n\nNázev: {nazev}\nOdkaz: {odkaz}"
-posli_telegram_zpravu(zprava)
+# --- LOGIKA PAMĚTI A ODESLÁNÍ ---
+pamatovany_nazev = ""
+if os.path.exists(SOUBOR_PAMET):
+    with open(SOUBOR_PAMET, "r", encoding="utf-8") as soubor:
+        pamatovany_nazev = soubor.read()
 
-print("Zpráva byla odeslána na Telegram!")
+if nazev != pamatovany_nazev:
+    zprava = f"🔔 Nový dokument na úřední desce!\n\nNázev: {nazev}\nOdkaz: {odkaz}"
+    posli_telegram_zpravu(zprava)
+    print("Našel jsem nový dokument! Zpráva odeslána na Telegram.")
+    
+    with open(SOUBOR_PAMET, "w", encoding="utf-8") as soubor:
+        soubor.write(nazev)
+else:
+    print("Na desce není nic nového. Nespamuji na Telegram.")
