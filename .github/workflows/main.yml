@@ -1,0 +1,39 @@
+name: Hlidac Uredni Desky
+
+on:
+  schedule:
+    # Budík: 6:00, 10:00 a 15:00 UTC (odpovídá 8, 12, 17 v letním čase ČR)
+    - cron: '0 6,10,15 * * *'
+  workflow_dispatch: # Tlačítko pro ruční spuštění
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Důležité pro paměť bota: Povolíme zápis do repozitáře
+    permissions:
+      contents: write
+    steps:
+      - name: Stáhnout kód
+        uses: actions/checkout@v3
+
+      - name: Nastavit Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Nainstalovat knihovny
+        run: pip install -r requirements.txt
+
+      - name: Spustit skript
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py
+
+      - name: Uložit paměť (posledni_dokument.txt)
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add posledni_dokument.txt || exit 0
+          git commit -m "Aktualizace paměti bota" || exit 0
+          git push
