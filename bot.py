@@ -65,20 +65,37 @@ def main():
     soup = BeautifulSoup(response.text, 'html.parser')
     
     # Najdeme první (nejnovější) příspěvek na desce
-    # Struktura Týniště: příspěvky jsou v divu s třídou 'list-item'
+    title_el = None
     first_item = soup.find('div', class_='list-item')
-    if not first_item:
-        print("❌ Nepodařilo se načíst obsah desky.")
+    
+    if first_item:
+        title_el = first_item.find('a')
+    else:
+        # ZÁLOŽNÍ PLÁN: Pokud web vypadá jinak, najdeme prostě první odkaz patřící desce
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            text = a.text.strip()
+            # Hledáme odkaz, který vede do sekce desky, obsahuje text a není to jen odkaz na celou kategorii
+            if 'mesto/uredni-deska' in href and text and len(text) > 5 and href.strip('/') != 'mesto/uredni-deska':
+                title_el = a
+                break
+
+    if not title_el:
+        print("❌ Nepodařilo se načíst obsah desky. Web má pravděpodobně jinou strukturu.")
         return
 
-    title_el = first_item.find('a')
     title = title_el.text.strip()
-    link = BASE_URL + title_el['href']
     
-    # Kontrola historie (aby bot neposílal stejnou věc dokola)
+    # Ošetření, aby odkaz byl vždy kompletní
+    if title_el['href'].startswith('http'):
+        link = title_el['href']
+    else:
+        link = BASE_URL + title_el['href']
+    
+    # Kontrola historie přes tvůj soubor "posledni_dokument.txt"
     last_link = ""
-    if os.path.exists("last_link.txt"):
-        with open("last_link.txt", "r") as f:
+    if os.path.exists("posledni_dokument.txt"):
+        with open("posledni_dokument.txt", "r") as f:
             last_link = f.read().strip()
             
     if link == last_link:
@@ -90,28 +107,7 @@ def main():
     # Přejdeme na detail zprávy a najdeme všechna PDF
     detail_res = requests.get(link)
     detail_soup = BeautifulSoup(detail_res.text, 'html.parser')
-    pdf_links = [BASE_URL + a['href'] for a in detail_soup.find_all('a', href=True) if a['href'].endswith('.pdf')]
     
-    stazene_soubory = []
-    for i, pdf_url in enumerate(pdf_links):
-        path = f"soubor_{i}.pdf"
-        with open(path, 'wb') as f:
-            f.write(requests.get(pdf_url).content)
-        stazene_soubory.append(path)
-        
-    # AI analýza
-    summary = get_ai_summary(stazene_soubory)
-    
-    # Odeslání
-    send_telegram(title, link, summary, stazene_soubory)
-    
-    # Uložíme si link jako poslední zpracovaný
-    with open("last_link.txt", "w") as f:
-        f.write(link)
-        
-    # Smazání lokálních PDF
-    for f in stazene_soubory:
-        os.remove(f)
-
-if __name__ == "__main__":
-    main()
+    # Hledáme odkazy končící na .pdf
+    pdf_links = []
+    for a in detail
