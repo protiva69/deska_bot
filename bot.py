@@ -110,4 +110,7 @@ def main():
     
     # Hledáme odkazy končící na .pdf
     pdf_links = []
-    for a in detail
+    for a in detail_soup.find_all('a', href=True):
+        if a['href'].lower().endswith('.pdf'):
+            pdf_link = a['href'] if a['href'].startswith('http') else BASE_URL + a['href']
+            pdf_links.append(pdf_link)
