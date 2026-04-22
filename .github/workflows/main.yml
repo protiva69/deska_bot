@@ -31,10 +31,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python bot.py
 
-      - name: Uložit paměť (last_link.txt)
+      - name: Uložit paměť (posledni_dokument.txt)
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git add last_link.txt || exit 0
+          git add posledni_dokument.txt || exit 0
           git commit -m "Aktualizace paměti bota" || exit 0
           git push
