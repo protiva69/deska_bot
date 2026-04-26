@@ -36,7 +36,7 @@ PRIPONY_Z_URL = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".txt
 PRILOHA_KLICOVA_SLOVA = ["file.php", "download", "priloha", "attachment", "dokument", "soubor"]
 
 # Inicializace Gemini
-client = genai.Client(api_key=GEMINI_KEY)
+client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 
 
 def je_priloha(href):
@@ -121,7 +121,7 @@ def get_ai_summary(soubory):
         print("🧠 Generuji shrnutí...")
         sys.stdout.flush()
         response = client.models.generate_content(
-            model="gemini-1.5-flash-8b-001",
+            model="gemini-1.5-flash",
             contents=contents
         )
         print("✅ Shrnutí hotovo.")
