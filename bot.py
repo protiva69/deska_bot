@@ -113,7 +113,7 @@ def get_ai_summary(soubory):
         sys.stdout.flush()
         time.sleep(2)
 
-        prompt = "Přečti si tyto úřední dokumenty a shrň je do jednoho odstavce. Piš česky, stylem jako když se dva chlapy baví v hospodě u piva – žádný úřednický kecy, normální lidská řeč, klidně trochu sarkasmu nebo nadsázky. Drž se faktů z dokumentu, ale polopaticky a přirozeně."
+        prompt = "Přečti si tyto úřední dokumenty a shrň je do jednoho odstavce normální češtinou. Piš tak, aby tomu rozuměl každý běžný člověk bez právního nebo úředního vzdělání. Žádné složité fráze, žádný úřednický jazyk — jen prostě a jasně o čem dokument je a co z toho vyplývá pro občana."
 
         contents = [types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type) for f in uploaded_files]
         contents.append(types.Part.from_text(text=prompt))
@@ -121,7 +121,7 @@ def get_ai_summary(soubory):
         print("🧠 Generuji shrnutí...")
         sys.stdout.flush()
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash-8b",
             contents=contents
         )
         print("✅ Shrnutí hotovo.")
