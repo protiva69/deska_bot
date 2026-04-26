@@ -121,7 +121,7 @@ def get_ai_summary(soubory):
         print("🧠 Generuji shrnutí...")
         sys.stdout.flush()
         response = client.models.generate_content(
-            model="gemini-1.5-flash-8b",
+            model="gemini-1.5-flash-8b-001",
             contents=contents
         )
         print("✅ Shrnutí hotovo.")
