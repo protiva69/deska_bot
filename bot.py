@@ -3,7 +3,6 @@ import requests
 from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
-import time
 import sys
 
 # --- KONFIGURACE ---
@@ -36,7 +35,7 @@ PRIPONY_Z_URL = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".txt
 PRILOHA_KLICOVA_SLOVA = ["file.php", "download", "priloha", "attachment", "dokument", "soubor"]
 
 # Inicializace Gemini
-client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
+client = genai.Client(api_key=GEMINI_KEY)
 
 
 def je_priloha(href):
@@ -57,7 +56,6 @@ def stahni_prilohu(url, index):
 
         ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
 
-        # Ignoruj HTML — to jsou stránky, ne dokumenty
         if ct.startswith("text/html"):
             print(f"  ⏭ Přeskočeno (HTML stránka): {url}")
             return None
@@ -65,7 +63,6 @@ def stahni_prilohu(url, index):
         if ct in POVOLENE_TYPY:
             pripona, mime_type = POVOLENE_TYPY[ct]
         else:
-            # Zkus odhadnout z URL
             url_lower = url.lower()
             pripona = None
             for p in PRIPONY_Z_URL:
@@ -95,34 +92,24 @@ def get_ai_summary(soubory):
 
     print(f"🤖 AI analyzuje {len(soubory)} souborů...")
     sys.stdout.flush()
-    uploaded_files = []
     try:
-        for path, mime_type in soubory:
-            print(f"  📤 Nahrávám do Gemini: {path} ({mime_type})")
-            sys.stdout.flush()
-            with open(path, "rb") as f:
-                uploaded = client.files.upload(
-                    file=f,
-                    config=types.UploadFileConfig(mime_type=mime_type)
-                )
-            print(f"  ✓ Nahráno jako: {uploaded.name}")
-            sys.stdout.flush()
-            uploaded_files.append(uploaded)
-
-        print("⏳ Čekám 2s a volám model...")
-        sys.stdout.flush()
-        time.sleep(2)
-
         prompt = "Přečti si tyto úřední dokumenty a shrň je do jednoho odstavce normální češtinou. Piš tak, aby tomu rozuměl každý běžný člověk bez právního nebo úředního vzdělání. Žádné složité fráze, žádný úřednický jazyk — jen prostě a jasně o čem dokument je a co z toho vyplývá pro občana."
 
-        contents = [types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type) for f in uploaded_files]
-        contents.append(types.Part.from_text(text=prompt))
+        parts = []
+        for path, mime_type in soubory:
+            print(f"  📎 Přidávám soubor: {path} ({mime_type})")
+            sys.stdout.flush()
+            with open(path, "rb") as f:
+                data = f.read()
+            parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+
+        parts.append(types.Part.from_text(text=prompt))
 
         print("🧠 Generuji shrnutí...")
         sys.stdout.flush()
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=contents
+            model="gemini-2.0-flash",
+            contents=parts
         )
         print("✅ Shrnutí hotovo.")
         sys.stdout.flush()
@@ -132,12 +119,6 @@ def get_ai_summary(soubory):
         print(f"❌ CHYBA v get_ai_summary: {type(e).__name__}: {e}")
         sys.stdout.flush()
         return f"Nepodařilo se vytvořit AI shrnutí. (Chyba: {e})"
-    finally:
-        for f in uploaded_files:
-            try:
-                client.files.delete(name=f.name)
-            except Exception:
-                pass
 
 
 def send_telegram(title, link, summary, soubory):
