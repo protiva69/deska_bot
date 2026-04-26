@@ -14,8 +14,8 @@ CHAT_ID = os.getenv("CHAT_ID")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 SOUBOR_PAMET = "posledni_dokument.txt"
 
-# Mapování Content-Type na příponu souboru
-CONTENT_TYPE_MAP = {
+# Povolené Content-Type → (přípona, mime_type pro Gemini)
+POVOLENE_TYPY = {
     "application/pdf":                                                              ("pdf",  "application/pdf"),
     "application/msword":                                                           ("doc",  "application/msword"),
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document":     ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
@@ -29,13 +29,10 @@ CONTENT_TYPE_MAP = {
     "image/jpeg":                                                                   ("jpg",  "image/jpeg"),
 }
 
-# Přípony pro detekci příloh přímo z URL (záloha pokud URL příponu má)
-PRIPONY_Z_URL = {
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-    ".odt", ".ods", ".txt", ".rtf", ".png", ".jpg", ".jpeg"
-}
+# Přípony pro detekci v URL (záloha)
+PRIPONY_Z_URL = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".txt", ".rtf", ".png", ".jpg", ".jpeg"}
 
-# Klíčová slova v href která naznačují přílohu (i bez přípony)
+# Klíčová slova v href která naznačují přílohu
 PRILOHA_KLICOVA_SLOVA = ["file.php", "download", "priloha", "attachment", "dokument", "soubor"]
 
 # Inicializace Gemini
@@ -43,13 +40,10 @@ client = genai.Client(api_key=GEMINI_KEY)
 
 
 def je_priloha(href):
-    """Vrátí True pokud href vypadá jako odkaz na přílohu."""
     href_lower = href.lower()
-    # Má příponu dokumentu?
     for pripona in PRIPONY_Z_URL:
         if href_lower.endswith(pripona):
             return True
-    # Obsahuje klíčové slovo?
     for slovo in PRILOHA_KLICOVA_SLOVA:
         if slovo in href_lower:
             return True
@@ -57,25 +51,31 @@ def je_priloha(href):
 
 
 def stahni_prilohu(url, index):
-    """Stáhne přílohu, zjistí typ z Content-Type, vrátí (path, mime_type) nebo None."""
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
 
-        # Zjisti Content-Type (bez parametrů jako charset)
         ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
 
-        if ct in CONTENT_TYPE_MAP:
-            pripona, mime_type = CONTENT_TYPE_MAP[ct]
+        # Ignoruj HTML — to jsou stránky, ne dokumenty
+        if ct.startswith("text/html"):
+            print(f"  ⏭ Přeskočeno (HTML stránka): {url}")
+            return None
+
+        if ct in POVOLENE_TYPY:
+            pripona, mime_type = POVOLENE_TYPY[ct]
         else:
-            # Zkus odhadnout příponu z URL jako zálohu
+            # Zkus odhadnout z URL
             url_lower = url.lower()
-            pripona = "bin"
-            mime_type = ct or "application/octet-stream"
+            pripona = None
             for p in PRIPONY_Z_URL:
                 if url_lower.endswith(p):
                     pripona = p.lstrip(".")
                     break
+            if not pripona:
+                print(f"  ⏭ Přeskočeno (neznámý typ '{ct}'): {url}")
+                return None
+            mime_type = ct or "application/octet-stream"
 
         path = f"priloha_{index}.{pripona}"
         with open(path, "wb") as f:
@@ -90,21 +90,27 @@ def stahni_prilohu(url, index):
 
 
 def get_ai_summary(soubory):
-    """soubory = list of (path, mime_type)"""
     if not soubory:
         return "K tomuto oznámení nejsou připojeny žádné dokumenty."
 
     print(f"🤖 AI analyzuje {len(soubory)} souborů...")
+    sys.stdout.flush()
     uploaded_files = []
     try:
         for path, mime_type in soubory:
+            print(f"  📤 Nahrávám do Gemini: {path} ({mime_type})")
+            sys.stdout.flush()
             with open(path, "rb") as f:
                 uploaded = client.files.upload(
                     file=f,
                     config=types.UploadFileConfig(mime_type=mime_type)
                 )
+            print(f"  ✓ Nahráno jako: {uploaded.name}")
+            sys.stdout.flush()
             uploaded_files.append(uploaded)
 
+        print("⏳ Čekám 2s a volám model...")
+        sys.stdout.flush()
         time.sleep(2)
 
         prompt = "Přečti si tyto úřední dokumenty a shrň je do jednoho odstavce. Piš česky, stylem jako když se dva chlapy baví v hospodě u piva – žádný úřednický kecy, normální lidská řeč, klidně trochu sarkasmu nebo nadsázky. Drž se faktů z dokumentu, ale polopaticky a přirozeně."
@@ -112,13 +118,19 @@ def get_ai_summary(soubory):
         contents = [types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type) for f in uploaded_files]
         contents.append(types.Part.from_text(text=prompt))
 
+        print("🧠 Generuji shrnutí...")
+        sys.stdout.flush()
         response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=contents
         )
+        print("✅ Shrnutí hotovo.")
+        sys.stdout.flush()
         return response.text
 
     except Exception as e:
+        print(f"❌ CHYBA v get_ai_summary: {type(e).__name__}: {e}")
+        sys.stdout.flush()
         return f"Nepodařilo se vytvořit AI shrnutí. (Chyba: {e})"
     finally:
         for f in uploaded_files:
@@ -176,7 +188,6 @@ def main():
     detail_res = requests.get(odkaz)
     detail_soup = BeautifulSoup(detail_res.text, "html.parser")
 
-    # Sbírej unikátní URL příloh
     prilohy_urls = []
     for a in detail_soup.find_all("a", href=True):
         href = a["href"]
@@ -193,7 +204,7 @@ def main():
         if vysledek:
             stazene_soubory.append(vysledek)
 
-    print(f"📥 Úspěšně staženo: {len(stazene_soubory)} souborů")
+    print(f"📥 Úspěšně staženo dokumentů: {len(stazene_soubory)}")
 
     summary = get_ai_summary(stazene_soubory)
     send_telegram(nazev, odkaz, summary, stazene_soubory)
