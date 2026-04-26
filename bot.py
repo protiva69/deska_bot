@@ -14,24 +14,80 @@ CHAT_ID = os.getenv("CHAT_ID")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 SOUBOR_PAMET = "posledni_dokument.txt"
 
-# Přípony které stahujeme a posíláme do Gemini
-PODPOROVANE_PRIPONY = {
-    ".pdf":  "application/pdf",
-    ".doc":  "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".xls":  "application/vnd.ms-excel",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".odt":  "application/vnd.oasis.opendocument.text",
-    ".ods":  "application/vnd.oasis.opendocument.spreadsheet",
-    ".txt":  "text/plain",
-    ".rtf":  "application/rtf",
-    ".png":  "image/png",
-    ".jpg":  "image/jpeg",
-    ".jpeg": "image/jpeg",
+# Mapování Content-Type na příponu souboru
+CONTENT_TYPE_MAP = {
+    "application/pdf":                                                              ("pdf",  "application/pdf"),
+    "application/msword":                                                           ("doc",  "application/msword"),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":     ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    "application/vnd.ms-excel":                                                     ("xls",  "application/vnd.ms-excel"),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":           ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    "application/vnd.oasis.opendocument.text":                                     ("odt",  "application/vnd.oasis.opendocument.text"),
+    "application/vnd.oasis.opendocument.spreadsheet":                              ("ods",  "application/vnd.oasis.opendocument.spreadsheet"),
+    "text/plain":                                                                   ("txt",  "text/plain"),
+    "application/rtf":                                                              ("rtf",  "application/rtf"),
+    "image/png":                                                                    ("png",  "image/png"),
+    "image/jpeg":                                                                   ("jpg",  "image/jpeg"),
 }
 
-# Inicializace Gemini (nové SDK)
+# Přípony pro detekci příloh přímo z URL (záloha pokud URL příponu má)
+PRIPONY_Z_URL = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx",
+    ".odt", ".ods", ".txt", ".rtf", ".png", ".jpg", ".jpeg"
+}
+
+# Klíčová slova v href která naznačují přílohu (i bez přípony)
+PRILOHA_KLICOVA_SLOVA = ["file.php", "download", "priloha", "attachment", "dokument", "soubor"]
+
+# Inicializace Gemini
 client = genai.Client(api_key=GEMINI_KEY)
+
+
+def je_priloha(href):
+    """Vrátí True pokud href vypadá jako odkaz na přílohu."""
+    href_lower = href.lower()
+    # Má příponu dokumentu?
+    for pripona in PRIPONY_Z_URL:
+        if href_lower.endswith(pripona):
+            return True
+    # Obsahuje klíčové slovo?
+    for slovo in PRILOHA_KLICOVA_SLOVA:
+        if slovo in href_lower:
+            return True
+    return False
+
+
+def stahni_prilohu(url, index):
+    """Stáhne přílohu, zjistí typ z Content-Type, vrátí (path, mime_type) nebo None."""
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+
+        # Zjisti Content-Type (bez parametrů jako charset)
+        ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
+
+        if ct in CONTENT_TYPE_MAP:
+            pripona, mime_type = CONTENT_TYPE_MAP[ct]
+        else:
+            # Zkus odhadnout příponu z URL jako zálohu
+            url_lower = url.lower()
+            pripona = "bin"
+            mime_type = ct or "application/octet-stream"
+            for p in PRIPONY_Z_URL:
+                if url_lower.endswith(p):
+                    pripona = p.lstrip(".")
+                    break
+
+        path = f"priloha_{index}.{pripona}"
+        with open(path, "wb") as f:
+            f.write(r.content)
+
+        print(f"  ✓ Staženo: {path} ({ct})")
+        return (path, mime_type)
+
+    except Exception as e:
+        print(f"  ✗ Nepodařilo se stáhnout {url}: {e}")
+        return None
+
 
 def get_ai_summary(soubory):
     """soubory = list of (path, mime_type)"""
@@ -71,39 +127,40 @@ def get_ai_summary(soubory):
             except Exception:
                 pass
 
+
 def send_telegram(title, link, summary, soubory):
     print("📱 Odesílám na Telegram...")
     text = f"🔔 *Nový dokument na úřední desce*\n\n📌 *{title}*\n🔗 [Odkaz na detail]({link})\n\n🤖 *AI Shrnutí:*\n{summary}"
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     res = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
-
     msg_id = res.json().get("result", {}).get("message_id")
 
     for path, _ in soubory:
-        with open(path, 'rb') as f:
+        with open(path, "rb") as f:
             url_doc = f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument"
             requests.post(url_doc, data={"chat_id": CHAT_ID, "reply_to_message_id": msg_id}, files={"document": f})
+
 
 def main():
     print("🕵️ START: Kontroluji úřední desku...")
     sys.stdout.flush()
 
     response = requests.get(URL_DESKY)
-    response.encoding = 'utf-8'
-    soup = BeautifulSoup(response.text, 'html.parser')
+    response.encoding = "utf-8"
+    soup = BeautifulSoup(response.text, "html.parser")
 
-    tabulka = soup.find('table', class_='uredni_deska_vypis')
+    tabulka = soup.find("table", class_="uredni_deska_vypis")
     if not tabulka:
         print("❌ Tabulka 'uredni_deska_vypis' nebyla nalezena!")
         return
 
-    prvni_odkaz = tabulka.find('a')
+    prvni_odkaz = tabulka.find("a")
     if not prvni_odkaz:
         print("❌ V tabulce nebyl nalezen žádný odkaz!")
         return
 
     nazev = prvni_odkaz.text.strip()
-    odkaz = BASE_URL + prvni_odkaz['href']
+    odkaz = BASE_URL + prvni_odkaz["href"]
 
     pamatovany_nazev = ""
     if os.path.exists(SOUBOR_PAMET):
@@ -117,28 +174,26 @@ def main():
     print(f"🆕 Nalezena novinka: {nazev}")
 
     detail_res = requests.get(odkaz)
-    detail_soup = BeautifulSoup(detail_res.text, 'html.parser')
+    detail_soup = BeautifulSoup(detail_res.text, "html.parser")
 
+    # Sbírej unikátní URL příloh
     prilohy_urls = []
-    for a in detail_soup.find_all('a', href=True):
-        href_lower = a['href'].lower()
-        for pripona, mime_type in PODPOROVANE_PRIPONY.items():
-            if href_lower.endswith(pripona):
-                full_url = a['href'] if a['href'].startswith('http') else BASE_URL + a['href']
-                if full_url not in [u for u, _ in prilohy_urls]:
-                    prilohy_urls.append((full_url, mime_type))
-                break
+    for a in detail_soup.find_all("a", href=True):
+        href = a["href"]
+        if je_priloha(href):
+            full_url = href if href.startswith("http") else BASE_URL + href
+            if full_url not in prilohy_urls:
+                prilohy_urls.append(full_url)
 
-    print(f"📎 Nalezeno příloh: {len(prilohy_urls)}")
+    print(f"📎 Nalezeno potenciálních příloh: {len(prilohy_urls)}")
 
     stazene_soubory = []
-    for i, (url, mime_type) in enumerate(prilohy_urls):
-        pripona = url.rsplit('.', 1)[-1].lower()
-        path = f"priloha_{i}.{pripona}"
-        r = requests.get(url)
-        with open(path, 'wb') as f:
-            f.write(r.content)
-        stazene_soubory.append((path, mime_type))
+    for i, url in enumerate(prilohy_urls):
+        vysledek = stahni_prilohu(url, i)
+        if vysledek:
+            stazene_soubory.append(vysledek)
+
+    print(f"📥 Úspěšně staženo: {len(stazene_soubory)} souborů")
 
     summary = get_ai_summary(stazene_soubory)
     send_telegram(nazev, odkaz, summary, stazene_soubory)
@@ -149,6 +204,7 @@ def main():
     for path, _ in stazene_soubory:
         os.remove(path)
     print("✅ Vše hotovo a uloženo!")
+
 
 if __name__ == "__main__":
     main()
