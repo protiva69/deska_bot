@@ -2,6 +2,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 import sys
+import shutil
 
 # --- KONFIGURACE ---
 URL_DESKY = "https://www.tyniste.cz/cs/mestsky-urad/uredni-deska-3.html"
@@ -11,7 +12,6 @@ CHAT_ID = os.getenv("CHAT_ID")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 SOUBOR_PAMET = "posledni_dokument.txt"
 
-# Povolené Content-Type → (přípona, typ)
 POVOLENE_TYPY = {
     "application/pdf":                                                              ("pdf",  "pdf"),
     "application/msword":                                                           ("doc",  "doc"),
@@ -78,23 +78,34 @@ def stahni_prilohu(url, index):
 
 
 def extrahuj_text(path, typ):
-    """Extrahuje text ze souboru podle typu."""
     try:
         if typ == "pdf":
             from pypdf import PdfReader
             reader = PdfReader(path)
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            return text.strip()
+            return text.strip() or None
 
         elif typ in ("doc", "docx"):
             import docx
-            doc = docx.Document(path)
-            text = "\n".join(p.text for p in doc.paragraphs)
-            return text.strip()
+            # Některé .doc soubory jsou ve skutečnosti OOXML — zkusíme jako .docx
+            try_path = path
+            if path.endswith(".doc"):
+                try_path = path + "x"  # priloha_5.docx
+                shutil.copy(path, try_path)
+            try:
+                doc = docx.Document(try_path)
+                text = "\n".join(p.text for p in doc.paragraphs)
+                if try_path != path and os.path.exists(try_path):
+                    os.remove(try_path)
+                return text.strip() or None
+            except Exception:
+                if try_path != path and os.path.exists(try_path):
+                    os.remove(try_path)
+                raise
 
         elif typ == "txt":
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read().strip()
+                return f.read().strip() or None
 
         else:
             return None
@@ -118,13 +129,13 @@ def get_ai_summary(soubory):
         sys.stdout.flush()
         text = extrahuj_text(path, typ)
         if text:
-            texty.append(text[:8000])  # limit na soubor
+            texty.append(text[:8000])
         else:
             nepodporovane += 1
 
     if not texty:
         if nepodporovane > 0:
-            return "Přílohy jsou v nepodporovaném formátu (obrázky, tabulky) — shrnutí nelze vytvořit."
+            return "Přílohy jsou v nepodporovaném formátu — shrnutí nelze vytvořit."
         return "Z příloh se nepodařilo extrahovat žádný text."
 
     obsah = "\n\n---\n\n".join(texty)
@@ -240,7 +251,8 @@ def main():
         f.write(nazev)
 
     for path, _ in stazene_soubory:
-        os.remove(path)
+        if os.path.exists(path):
+            os.remove(path)
     print("✅ Vše hotovo a uloženo!")
 
 
