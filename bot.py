@@ -1,8 +1,6 @@
 import os
 import requests
 from bs4 import BeautifulSoup
-from google import genai
-from google.genai import types
 import sys
 
 # --- KONFIGURACE ---
@@ -10,32 +8,26 @@ URL_DESKY = "https://www.tyniste.cz/cs/mestsky-urad/uredni-deska-3.html"
 BASE_URL = "https://www.tyniste.cz"
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_KEY = os.getenv("GROQ_API_KEY")
 SOUBOR_PAMET = "posledni_dokument.txt"
 
-# Povolené Content-Type → (přípona, mime_type pro Gemini)
+# Povolené Content-Type → (přípona, typ)
 POVOLENE_TYPY = {
-    "application/pdf":                                                              ("pdf",  "application/pdf"),
-    "application/msword":                                                           ("doc",  "application/msword"),
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":     ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-    "application/vnd.ms-excel":                                                     ("xls",  "application/vnd.ms-excel"),
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":           ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-    "application/vnd.oasis.opendocument.text":                                     ("odt",  "application/vnd.oasis.opendocument.text"),
-    "application/vnd.oasis.opendocument.spreadsheet":                              ("ods",  "application/vnd.oasis.opendocument.spreadsheet"),
-    "text/plain":                                                                   ("txt",  "text/plain"),
-    "application/rtf":                                                              ("rtf",  "application/rtf"),
-    "image/png":                                                                    ("png",  "image/png"),
-    "image/jpeg":                                                                   ("jpg",  "image/jpeg"),
+    "application/pdf":                                                              ("pdf",  "pdf"),
+    "application/msword":                                                           ("doc",  "doc"),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":     ("docx", "docx"),
+    "application/vnd.ms-excel":                                                     ("xls",  "other"),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":           ("xlsx", "other"),
+    "application/vnd.oasis.opendocument.text":                                     ("odt",  "other"),
+    "application/vnd.oasis.opendocument.spreadsheet":                              ("ods",  "other"),
+    "text/plain":                                                                   ("txt",  "txt"),
+    "application/rtf":                                                              ("rtf",  "other"),
+    "image/png":                                                                    ("png",  "other"),
+    "image/jpeg":                                                                   ("jpg",  "other"),
 }
 
-# Přípony pro detekci v URL (záloha)
 PRIPONY_Z_URL = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".txt", ".rtf", ".png", ".jpg", ".jpeg"}
-
-# Klíčová slova v href která naznačují přílohu
 PRILOHA_KLICOVA_SLOVA = ["file.php", "download", "priloha", "attachment", "dokument", "soubor"]
-
-# Inicializace Gemini
-client = genai.Client(api_key=GEMINI_KEY)
 
 
 def je_priloha(href):
@@ -53,7 +45,6 @@ def stahni_prilohu(url, index):
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
-
         ct = r.headers.get("Content-Type", "").split(";")[0].strip().lower()
 
         if ct.startswith("text/html"):
@@ -61,7 +52,7 @@ def stahni_prilohu(url, index):
             return None
 
         if ct in POVOLENE_TYPY:
-            pripona, mime_type = POVOLENE_TYPY[ct]
+            pripona, typ = POVOLENE_TYPY[ct]
         else:
             url_lower = url.lower()
             pripona = None
@@ -72,17 +63,44 @@ def stahni_prilohu(url, index):
             if not pripona:
                 print(f"  ⏭ Přeskočeno (neznámý typ '{ct}'): {url}")
                 return None
-            mime_type = ct or "application/octet-stream"
+            typ = "other"
 
         path = f"priloha_{index}.{pripona}"
         with open(path, "wb") as f:
             f.write(r.content)
 
         print(f"  ✓ Staženo: {path} ({ct})")
-        return (path, mime_type)
+        return (path, typ)
 
     except Exception as e:
         print(f"  ✗ Nepodařilo se stáhnout {url}: {e}")
+        return None
+
+
+def extrahuj_text(path, typ):
+    """Extrahuje text ze souboru podle typu."""
+    try:
+        if typ == "pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(path)
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            return text.strip()
+
+        elif typ in ("doc", "docx"):
+            import docx
+            doc = docx.Document(path)
+            text = "\n".join(p.text for p in doc.paragraphs)
+            return text.strip()
+
+        elif typ == "txt":
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read().strip()
+
+        else:
+            return None
+
+    except Exception as e:
+        print(f"  ✗ Chyba při extrakci textu z {path}: {e}")
         return None
 
 
@@ -90,33 +108,61 @@ def get_ai_summary(soubory):
     if not soubory:
         return "K tomuto oznámení nejsou připojeny žádné dokumenty."
 
-    print(f"🤖 AI analyzuje {len(soubory)} souborů...")
+    print(f"🤖 Extrahuji text z {len(soubory)} souborů...")
     sys.stdout.flush()
-    try:
-        prompt = "Přečti si tyto úřední dokumenty a shrň je do jednoho odstavce normální češtinou. Piš tak, aby tomu rozuměl každý běžný člověk bez právního nebo úředního vzdělání. Žádné složité fráze, žádný úřednický jazyk — jen prostě a jasně o čem dokument je a co z toho vyplývá pro občana."
 
-        parts = []
-        for path, mime_type in soubory:
-            print(f"  📎 Přidávám soubor: {path} ({mime_type})")
-            sys.stdout.flush()
-            with open(path, "rb") as f:
-                data = f.read()
-            parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
-
-        parts.append(types.Part.from_text(text=prompt))
-
-        print("🧠 Generuji shrnutí...")
+    texty = []
+    nepodporovane = 0
+    for path, typ in soubory:
+        print(f"  📄 Zpracovávám: {path} (typ: {typ})")
         sys.stdout.flush()
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=parts
+        text = extrahuj_text(path, typ)
+        if text:
+            texty.append(text[:8000])  # limit na soubor
+        else:
+            nepodporovane += 1
+
+    if not texty:
+        if nepodporovane > 0:
+            return "Přílohy jsou v nepodporovaném formátu (obrázky, tabulky) — shrnutí nelze vytvořit."
+        return "Z příloh se nepodařilo extrahovat žádný text."
+
+    obsah = "\n\n---\n\n".join(texty)
+    if len(obsah) > 20000:
+        obsah = obsah[:20000] + "...(zkráceno)"
+
+    prompt = f"""Přečti si tento úřední dokument a shrň ho do jednoho odstavce normální češtinou. Piš tak, aby tomu rozuměl každý běžný člověk bez právního nebo úředního vzdělání. Žádné složité fráze, žádný úřednický jazyk — jen prostě a jasně o čem dokument je a co z toho vyplývá pro občana.
+
+Dokument:
+{obsah}"""
+
+    print("🧠 Volám Groq API...")
+    sys.stdout.flush()
+
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 500,
+                "temperature": 0.7
+            },
+            timeout=30
         )
+        response.raise_for_status()
+        result = response.json()
+        text = result["choices"][0]["message"]["content"]
         print("✅ Shrnutí hotovo.")
         sys.stdout.flush()
-        return response.text
+        return text
 
     except Exception as e:
-        print(f"❌ CHYBA v get_ai_summary: {type(e).__name__}: {e}")
+        print(f"❌ CHYBA při volání Groq: {type(e).__name__}: {e}")
         sys.stdout.flush()
         return f"Nepodařilo se vytvořit AI shrnutí. (Chyba: {e})"
 
