@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import sys
 import shutil
+import json
 
 # --- KONFIGURACE ---
 URL_DESKY = "https://www.tyniste.cz/cs/mestsky-urad/uredni-deska-3.html"
@@ -10,7 +11,7 @@ BASE_URL = "https://www.tyniste.cz"
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
-SOUBOR_PAMET = "posledni_dokument.txt"
+SOUBOR_PAMET = "posledni_dokumenty.json"
 
 POVOLENE_TYPY = {
     "application/pdf":                                                              ("pdf",  "pdf"),
@@ -28,6 +29,23 @@ POVOLENE_TYPY = {
 
 PRIPONY_Z_URL = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".txt", ".rtf", ".png", ".jpg", ".jpeg"}
 PRILOHA_KLICOVA_SLOVA = ["file.php", "download", "priloha", "attachment", "dokument", "soubor"]
+
+
+def nacti_pamet():
+    if os.path.exists(SOUBOR_PAMET):
+        with open(SOUBOR_PAMET, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    # Záloha: zkus načíst starý formát
+    if os.path.exists("posledni_dokument.txt"):
+        with open("posledni_dokument.txt", "r", encoding="utf-8") as f:
+            nazev = f.read().strip()
+            return {nazev} if nazev else set()
+    return set()
+
+
+def uloz_pamet(nazvy):
+    with open(SOUBOR_PAMET, "w", encoding="utf-8") as f:
+        json.dump(list(nazvy), f, ensure_ascii=False)
 
 
 def je_priloha(href):
@@ -87,10 +105,9 @@ def extrahuj_text(path, typ):
 
         elif typ in ("doc", "docx"):
             import docx
-            # Některé .doc soubory jsou ve skutečnosti OOXML — zkusíme jako .docx
             try_path = path
             if path.endswith(".doc"):
-                try_path = path + "x"  # priloha_5.docx
+                try_path = path + "x"
                 shutil.copy(path, try_path)
             try:
                 doc = docx.Document(try_path)
@@ -175,53 +192,12 @@ Dokument:
     except Exception as e:
         print(f"❌ CHYBA při volání Groq: {type(e).__name__}: {e}")
         sys.stdout.flush()
-        return f"Nepodařilo se vytvořit AI shrnutí. (Chyba: {e})"
+        return f"Nepodařilo se vytvořit shrnutí. (Chyba: {e})"
 
 
-def send_telegram(title, link, summary, soubory):
-    print("📱 Odesílám na Telegram...")
-    text = f"🔔 *Nový dokument na úřední desce*\n\n📌 *{title}*\n🔗 [Odkaz na detail]({link})\n\n🤖 *AI Shrnutí:*\n{summary}"
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-  res = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True})
-    msg_id = res.json().get("result", {}).get("message_id")
-
-    for path, _ in soubory:
-        with open(path, "rb") as f:
-            url_doc = f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument"
-            requests.post(url_doc, data={"chat_id": CHAT_ID, "reply_to_message_id": msg_id}, files={"document": f})
-
-
-def main():
-    print("🕵️ START: Kontroluji úřední desku...")
+def zpracuj_polozku(nazev, odkaz):
+    print(f"🆕 Zpracovávám: {nazev}")
     sys.stdout.flush()
-
-    response = requests.get(URL_DESKY)
-    response.encoding = "utf-8"
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    tabulka = soup.find("table", class_="uredni_deska_vypis")
-    if not tabulka:
-        print("❌ Tabulka 'uredni_deska_vypis' nebyla nalezena!")
-        return
-
-    prvni_odkaz = tabulka.find("a")
-    if not prvni_odkaz:
-        print("❌ V tabulce nebyl nalezen žádný odkaz!")
-        return
-
-    nazev = prvni_odkaz.text.strip()
-    odkaz = BASE_URL + prvni_odkaz["href"]
-
-    pamatovany_nazev = ""
-    if os.path.exists(SOUBOR_PAMET):
-        with open(SOUBOR_PAMET, "r", encoding="utf-8") as f:
-            pamatovany_nazev = f.read().strip()
-
-    if nazev == pamatovany_nazev:
-        print("✅ Na desce není nic nového.")
-        return
-
-    print(f"🆕 Nalezena novinka: {nazev}")
 
     detail_res = requests.get(odkaz)
     detail_soup = BeautifulSoup(detail_res.text, "html.parser")
@@ -245,14 +221,77 @@ def main():
     print(f"📥 Úspěšně staženo dokumentů: {len(stazene_soubory)}")
 
     summary = get_ai_summary(stazene_soubory)
-    send_telegram(nazev, odkaz, summary, stazene_soubory)
 
-    with open(SOUBOR_PAMET, "w", encoding="utf-8") as f:
-        f.write(nazev)
+    # Odeslání na Telegram
+    print("📱 Odesílám na Telegram...")
+    text = f"🔔 *Nový dokument na úřední desce*\n\n📌 *{nazev}*\n🔗 [Odkaz na detail]({odkaz})\n\n{summary}"
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    res = requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    })
+    msg_id = res.json().get("result", {}).get("message_id")
 
+    for path, _ in stazene_soubory:
+        with open(path, "rb") as f:
+            url_doc = f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument"
+            requests.post(url_doc, data={"chat_id": CHAT_ID, "reply_to_message_id": msg_id}, files={"document": f})
+
+    # Úklid
     for path, _ in stazene_soubory:
         if os.path.exists(path):
             os.remove(path)
+
+
+def main():
+    print("🕵️ START: Kontroluji úřední desku...")
+    sys.stdout.flush()
+
+    response = requests.get(URL_DESKY)
+    response.encoding = "utf-8"
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    tabulka = soup.find("table", class_="uredni_deska_vypis")
+    if not tabulka:
+        print("❌ Tabulka 'uredni_deska_vypis' nebyla nalezena!")
+        return
+
+    # Načti všechny položky z tabulky
+    polozky = []
+    for a in tabulka.find_all("a"):
+        nazev = a.text.strip()
+        odkaz = BASE_URL + a["href"]
+        if nazev:
+            polozky.append((nazev, odkaz))
+
+    if not polozky:
+        print("❌ V tabulce nebyly nalezeny žádné položky!")
+        return
+
+    print(f"📋 Nalezeno položek na desce: {len(polozky)}")
+
+    # Načti paměť
+    pamatovane = nacti_pamet()
+
+    # Najdi nové položky (zachovej pořadí — nejstarší nová první)
+    nove = [(n, o) for n, o in polozky if n not in pamatovane]
+
+    if not nove:
+        print("✅ Na desce není nic nového.")
+        return
+
+    print(f"🆕 Nalezeno nových položek: {len(nove)}")
+
+    # Zpracuj každou novou položku
+    for nazev, odkaz in nove:
+        zpracuj_polozku(nazev, odkaz)
+
+    # Ulož všechny aktuální názvy jako novou paměť
+    aktualni_nazvy = {n for n, _ in polozky}
+    uloz_pamet(aktualni_nazvy)
+
     print("✅ Vše hotovo a uloženo!")
 
 
