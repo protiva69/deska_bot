@@ -182,7 +182,7 @@ def send_telegram(title, link, summary, soubory):
     print("📱 Odesílám na Telegram...")
     text = f"🔔 *Nový dokument na úřední desce*\n\n📌 *{title}*\n🔗 [Odkaz na detail]({link})\n\n🤖 *AI Shrnutí:*\n{summary}"
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    res = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+  res = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True})
     msg_id = res.json().get("result", {}).get("message_id")
 
     for path, _ in soubory:
