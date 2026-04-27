@@ -2,14 +2,12 @@ name: Hlidac Uredni Desky
 
 on:
   schedule:
-    # Budík: 6:00, 10:00 a 15:00 UTC (odpovídá 8, 12, 17 v letním čase ČR)
     - cron: '0 6,10,15 * * *'
-  workflow_dispatch: # Tlačítko pro ruční spuštění
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Důležité pro paměť bota: Povolíme zápis do repozitáře
     permissions:
       contents: write
     steps:
@@ -31,10 +29,10 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python bot.py
 
-      - name: Uložit paměť (posledni_dokument.txt)
+      - name: Uložit paměť
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
-          git add posledni_dokument.txt || exit 0
+          git add posledni_dokumenty.json || exit 0
           git commit -m "Aktualizace paměti bota" || exit 0
           git push
